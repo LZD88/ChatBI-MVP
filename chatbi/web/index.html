@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101828">
+  <title>ChatBI · 智能数据工作台</title>
+  <link rel="stylesheet" href="/static/styles.css?v=plan-execute-2">
+</head>
+<body>
+  <div class="app-frame">
+    <aside class="sidebar" aria-label="主导航">
+      <a class="brand" href="/" aria-label="ChatBI 首页">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M5 16V9m5 7V5m5 11v-4m4 7H3"/></svg>
+        </span>
+        <span><strong>ChatBI</strong><small>智能数据分析</small></span>
+      </a>
+
+      <nav class="nav-list">
+        <a class="nav-item active" href="#query-studio">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H8l-4 4V5Zm4 4h8M8 12h5"/></svg>
+          智能问数
+        </a>
+        <a class="nav-item" href="#current-result">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19V9m7 10V5m7 14v-7"/></svg>
+          查询结果
+        </a>
+        <a class="nav-item" href="#history-panel">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.5M4 4v4.5h4.5M12 8v5l3 2"/></svg>
+          查询记录
+        </a>
+      </nav>
+
+      <div class="sidebar-section">
+        <p>数据资产</p>
+        <div class="asset-row"><span>治理指标</span><strong>61</strong></div>
+        <div class="asset-row"><span>业务数据表</span><strong>30</strong></div>
+        <div class="asset-row"><span>语义字段</span><strong>192</strong></div>
+      </div>
+
+      <div class="sidebar-footer">
+        <span class="status-dot" aria-hidden="true"></span>
+        <div><strong>本地安全模式</strong><small>只读查询 · AST 防护</small></div>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <p class="breadcrumb">数据工作台 <span>/</span> 智能问数</p>
+          <h1>智能数据工作台</h1>
+        </div>
+        <div id="service-health" class="service-health" role="status" aria-live="polite">
+          <span class="health-pulse" aria-hidden="true"></span>
+          <span><strong>正在检查服务</strong><small>DeepSeek · Qwen · Chroma · MySQL</small></span>
+        </div>
+      </header>
+
+      <div class="content">
+        <section class="welcome-card" aria-labelledby="welcome-title">
+          <div class="welcome-copy">
+            <p class="eyebrow">NATURAL LANGUAGE BI</p>
+            <h2 id="welcome-title">把业务问题，直接交给数据</h2>
+            <p>用自然语言完成指标识别、语义召回、SQL 生成与安全执行。每一步均可追溯、可核验。</p>
+          </div>
+          <div class="capability-grid" aria-label="平台能力概览">
+            <div><span class="capability-icon blue">61</span><p><strong>治理指标</strong><small>覆盖 12 个业务域</small></p></div>
+            <div><span class="capability-icon violet">30</span><p><strong>数据表</strong><small>完整演示数据域</small></p></div>
+            <div><span class="capability-icon green">SQL</span><p><strong>安全执行</strong><small>只读 AST 安全网</small></p></div>
+          </div>
+        </section>
+
+        <section id="query-studio" class="panel query-panel" aria-labelledby="query-title">
+          <div class="panel-header">
+            <div class="title-group">
+              <span class="title-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M12 3a7 7 0 0 0-4 12.7V19h8v-3.3A7 7 0 0 0 12 3Zm-3 16h6m-5 3h4"/></svg>
+              </span>
+              <div><h2 id="query-title">向数据提问</h2><p>描述指标、维度、时间范围或分析目标</p></div>
+            </div>
+            <span class="secure-badge">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V8a5 5 0 0 1 10 0v2m-11 0h12v10H6V10Z"/></svg>
+              只读安全执行
+            </span>
+          </div>
+
+          <div class="examples" aria-label="示例问题">
+            <button type="button" data-example="按地区统计已完成订单的销售额">
+              <span>销售分析</span><strong>各地区销售额</strong>
+            </button>
+            <button type="button" data-example="各产品线的毛利率是多少？">
+              <span>盈利分析</span><strong>产品线毛利率</strong>
+            </button>
+            <button type="button" data-example="按仓库统计最新可用库存">
+              <span>库存分析</span><strong>仓库可用库存</strong>
+            </button>
+            <button type="button" data-example="按成本中心统计预算执行率">
+              <span>预算分析</span><strong>预算执行情况</strong>
+            </button>
+          </div>
+
+          <form id="query-form">
+            <label for="question" class="sr-only">业务问题</label>
+            <div class="composer">
+              <textarea id="question" rows="4" maxlength="1000" placeholder="例如：比较各产品线第三季度的收入、毛利和毛利率，并按毛利率排名"></textarea>
+              <div class="composer-footer">
+                <div class="composer-meta">
+                  <span id="status" aria-live="polite"><i class="ready-dot"></i>准备就绪</span>
+                  <span id="char-count">0 / 1000</span>
+                </div>
+                <button id="submit" class="primary" type="submit">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-6-7-1Zm7 1 7-8"/></svg>
+                  开始分析
+                </button>
+              </div>
+            </div>
+            <p id="input-error" class="input-error" role="alert"></p>
+          </form>
+        </section>
+
+        <section id="current-result" class="panel result-panel visible" aria-live="polite">
+          <div class="empty-state">
+            <span class="empty-visual" aria-hidden="true">
+              <svg viewBox="0 0 64 64"><path d="M13 49V30m13 19V19m13 30V26m13 23V12M8 54h48"/></svg>
+            </span>
+            <h2>等待你的业务问题</h2>
+            <p>查询结果、生成 SQL、语义召回和完整执行链路将在这里展示。</p>
+          </div>
+        </section>
+
+        <section id="history-panel" class="panel history-panel">
+          <div class="panel-header history-heading">
+            <div class="title-group">
+              <span class="title-icon soft" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.5M4 4v4.5h4.5M12 8v5l3 2"/></svg>
+              </span>
+              <div><h2>最近查询</h2><p>当前页面内的查询与 SQL 记录</p></div>
+            </div>
+            <button id="clear-history" class="text-button" type="button">清空记录</button>
+          </div>
+          <div id="history" class="history-list">
+            <div class="history-empty">完成一次查询后，记录会显示在这里。</div>
+          </div>
+        </section>
+
+        <footer class="page-footer">
+          <span>ChatBI MVP · 本地数据不会离开当前查询环境</span>
+          <span>DeepSeek SQL · Qwen Intent · Chroma Semantic</span>
+        </footer>
+      </div>
+    </main>
+  </div>
+  <script type="module" src="/static/app.mjs?v=plan-execute-2"></script>
+</body>
+</html>
