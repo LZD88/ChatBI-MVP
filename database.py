@@ -10,12 +10,13 @@ from __future__ import annotations
 import logging
 from queue import Empty, LifoQueue
 from time import perf_counter
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
-import pymysql
+import pymysql  # type: ignore[import-untyped]
 
+from chatbi.domain.security import SecuredQuery
+from chatbi.settings import get_settings
 from config import APP_CONFIG, DB_RUNTIME_CONFIG, get_database_source_config
-from security import QuerySecurityManager, UserContext
 
 logger = logging.getLogger("chatbi.database")
 
@@ -99,14 +100,15 @@ class DatabaseClient:
         db_config: dict[str, Any] | None = None,
         source_id: str | None = None,
         connection_factory: Callable[[], Any] | None = None,
-        security_manager: QuerySecurityManager | None = None,
         slow_query_threshold_ms: float | None = None,
+        query_timeout_seconds: int | None = None,
         time_fn: Callable[[], float] | None = None,
         connection_pool: DatabaseConnectionPool | None = None,
     ):
-        self.source_id = source_id or APP_CONFIG["database"]["default_source"]
+        database_config = cast(dict[str, Any], APP_CONFIG["database"])
+        self.source_id = source_id or cast(str, database_config["default_source"])
         self.config = db_config or get_database_source_config(self.source_id)
-        self.security = security_manager or QuerySecurityManager()
+        self.query_timeout_seconds = query_timeout_seconds or get_settings().query_timeout_seconds
         self.time_fn = time_fn or perf_counter
         self.slow_query_threshold_ms = (
             slow_query_threshold_ms
@@ -127,25 +129,29 @@ class DatabaseClient:
 
     def execute(
         self,
-        sql: str,
-        user: UserContext | None = None,
+        query: SecuredQuery,
     ) -> tuple[list[str], list[tuple]]:
         """
         执行 SQL 并返回结果
 
         Args:
-            sql: 待执行的 SQL 语句
+            query: 已通过 QuerySecurityManager 的查询对象
 
         Returns:
             (列名列表, 结果行列表)
         """
-        user_context = user or UserContext.demo_admin()
-        secured_sql = self.security.secure_sql(sql, user_context)
+        if not isinstance(query, SecuredQuery):
+            raise TypeError("DatabaseClient.execute only accepts SecuredQuery")
+        secured_sql = query.sql
         started_at = self.time_fn()
         conn = None
         try:
             conn = self._acquire_connection()
             with conn.cursor() as cursor:
+                cursor.execute(
+                    "SET SESSION MAX_EXECUTION_TIME = %s",
+                    (self.query_timeout_seconds * 1000,),
+                )
                 cursor.execute(secured_sql)
                 columns = [desc[0] for desc in cursor.description] if cursor.description else []
                 results = cursor.fetchall()
@@ -163,8 +169,7 @@ class DatabaseClient:
                         duration_ms,
                         secured_sql,
                     )
-                _, masked_rows = self.security.mask_result(columns, results, user_context)
-                return columns, masked_rows
+                return columns, list(results)
         except (pymysql.MySQLError, OSError) as exc:
             duration_ms = round((self.time_fn() - started_at) * 1000, 2)
             self.last_query_info = {
@@ -186,6 +191,10 @@ class DatabaseClient:
             return True
         except Exception:
             return False
+
+    def close(self) -> None:
+        if self.connection_pool is not None:
+            self.connection_pool.close_all()
 
     def _acquire_connection(self) -> Any:
         if self.connection_pool is not None:
