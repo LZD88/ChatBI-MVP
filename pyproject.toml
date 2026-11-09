@@ -1,12 +1,58 @@
 [project]
 name = "chatbi-project"
 version = "0.1.0"
-description = "Add your description here"
+description = "A safe local ChatBI text-to-SQL MVP"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "chromadb>=1.5.9,<2",
+    "fastapi>=0.121.0,<1",
+    "langchain-chroma>=1.0.0,<2",
+    "langchain-core>=1.0.0,<2",
+    "langchain-openai>=1.0.0,<2",
     "openai>=2.45.0",
+    "pydantic-settings>=2.11.0,<3",
+    "pymysql>=1.1.2,<2",
+    "python-dotenv>=1.2.0,<2",
+    "sqlglot>=28.0.0,<30",
+    "uvicorn[standard]>=0.38.0,<1",
 ]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.0,<1",
+    "mypy>=1.18.0,<2",
+    "pytest>=8.4.0,<10",
+    "pytest-asyncio>=1.2.0,<2",
+]
+
+[project.scripts]
+chatbi = "chatbi.api.app:run"
+chatbi-build-index = "chatbi.infrastructure.schema:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["chatbi"]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+addopts = "-ra -m 'not live_model'"
+testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: requires an explicitly configured integration dependency",
+    "live_model: calls a configured live model and is excluded by default",
+]
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true
+warn_unused_ignores = true
 
 [[tool.uv.index]]
 url = "https://mirrors.aliyun.com/pypi/simple/"

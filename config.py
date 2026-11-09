@@ -7,58 +7,57 @@
 from __future__ import annotations
 
 import copy
-import os
-
-from dotenv import load_dotenv
-
-load_dotenv()
+from chatbi.settings import get_settings
 
 
 def _build_default_db_source() -> dict[str, object]:
+    settings = get_settings()
     return {
-        "driver": os.getenv("DB_DRIVER", "mysql"),
-        "host": os.getenv("DB_HOST", "localhost"),
-        "port": int(os.getenv("DB_PORT", 3307)),
-        "user": os.getenv("DB_USER", "root"),
-        "password": os.getenv("DB_PASSWORD", "123456"),
-        "database": os.getenv("DB_NAME", "chatbi_mvp"),
+        "driver": settings.db_driver,
+        "host": settings.db_host,
+        "port": settings.db_port,
+        "user": settings.db_user,
+        "password": settings.db_password.get_secret_value() if settings.db_password else None,
+        "database": settings.db_name,
         "charset": "utf8mb4",
         "autocommit": True,
-        "connect_timeout": int(os.getenv("DB_CONNECT_TIMEOUT", 5)),
-        "read_timeout": int(os.getenv("DB_READ_TIMEOUT", 8)),
-        "write_timeout": int(os.getenv("DB_WRITE_TIMEOUT", 8)),
+        "connect_timeout": settings.db_connect_timeout,
+        "read_timeout": settings.db_read_timeout,
+        "write_timeout": settings.db_write_timeout,
     }
 
 
+_settings = get_settings()
 APP_CONFIG = {
-    "environment": os.getenv("APP_ENV", "dev"),
+    "environment": _settings.app_env,
     "database": {
-        "default_source": os.getenv("DB_DEFAULT_SOURCE", "mysql_main"),
+        "default_source": "mysql_main",
         "sources": {
-            os.getenv("DB_DEFAULT_SOURCE", "mysql_main"): _build_default_db_source(),
+            "mysql_main": _build_default_db_source(),
         },
         "runtime": {
-            "pool_size": int(os.getenv("DB_POOL_SIZE", 5)),
-            "max_overflow": int(os.getenv("DB_POOL_MAX_OVERFLOW", 5)),
-            "pool_timeout": float(os.getenv("DB_POOL_TIMEOUT", 3)),
-            "slow_query_threshold_ms": float(os.getenv("DB_SLOW_QUERY_THRESHOLD_MS", 200)),
+            "pool_size": _settings.db_pool_size,
+            "max_overflow": _settings.db_pool_max_overflow,
+            "pool_timeout": _settings.db_pool_timeout,
+            "slow_query_threshold_ms": _settings.db_slow_query_threshold_ms,
         },
     },
     "llm": {
-        "api_key": os.getenv("OPENAI_API_KEY"),
-        "base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-        "model": os.getenv("LLM_MODEL", "gpt-4"),
-        "embedding_model": os.getenv("EMBEDDING_MODEL", "text-embedding-3-large"),
-        "temperature": 0.1,
-        "max_tokens": int(os.getenv("LLM_MAX_TOKENS", 4000)),
+        "api_key": _settings.openai_api_key.get_secret_value() if _settings.openai_api_key else None,
+        "base_url": _settings.openai_base_url,
+        "model": _settings.llm_model,
+        "embedding_model": _settings.embedding_model,
+        "temperature": _settings.llm_temperature,
+        "max_tokens": _settings.llm_max_tokens,
+        "timeout": _settings.llm_timeout_seconds,
     },
     "features": {
-        "few_shot": os.getenv("FEATURE_FEW_SHOT", "true").lower() == "true",
-        "rules": os.getenv("FEATURE_RULES", "true").lower() == "true",
-        "guards": os.getenv("FEATURE_GUARDS", "true").lower() == "true",
-        "indicator_knowledge": os.getenv("FEATURE_INDICATOR_KNOWLEDGE", "true").lower() == "true",
-        "schema_linking": os.getenv("FEATURE_SCHEMA_LINKING", "false").lower() == "true",
-        "indicator_rag": os.getenv("FEATURE_INDICATOR_RAG", "false").lower() == "true",
+        "few_shot": _settings.feature_few_shot,
+        "rules": _settings.feature_rules,
+        "guards": _settings.feature_guards,
+        "indicator_knowledge": _settings.feature_indicator_knowledge,
+        "schema_linking": _settings.feature_schema_linking,
+        "indicator_rag": False,
     },
 }
 
