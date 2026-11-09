@@ -1,9 +1,10 @@
 {
+  "version": "2.0.0",
   "indicators": [
     {
       "name": "收入",
       "aliases": ["销售额", "营收", "销售收入"],
-      "definition": "不含税销售收入，财务口径的销售额",
+      "definition": "已完成销售订单的不含税收入，按订单日汇率折算为人民币",
       "formula": "SUM(o.net_amount * r.rate_to_cny)",
       "data_source": "sales_orders o JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency",
       "depends_on": [],
@@ -12,8 +13,8 @@
     },
     {
       "name": "销售成本",
-      "aliases": ["成本", "销售成本"],
-      "definition": "已售产品的实际成本，等于材料成本加人工成本乘以数量",
+      "aliases": ["已售成本"],
+      "definition": "已完成订单中，材料成本与人工成本之和乘以销售数量",
       "formula": "SUM((p.material_cost + p.labor_cost) * o.quantity)",
       "data_source": "sales_orders o JOIN dim_products p ON o.product_id = p.product_id",
       "depends_on": [],
@@ -23,32 +24,592 @@
     {
       "name": "毛利",
       "aliases": ["毛利润", "gross_profit"],
-      "definition": "销售收入减去销售成本",
-      "formula": "revenue - cost",
-      "data_source": "需同时关联 sales_orders、dim_products、exchange_rates",
+      "definition": "人民币销售收入减去销售成本",
+      "formula": "revenue - sales_cost",
+      "data_source": "sales_orders o JOIN dim_products p ON o.product_id = p.product_id JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency",
       "depends_on": ["收入", "销售成本"],
       "time_field": "o.order_date",
       "filters": ["o.order_status = 'completed'"]
     },
     {
+      "name": "毛利率",
+      "aliases": ["销售毛利率", "gross_margin"],
+      "definition": "毛利占人民币销售收入的比例",
+      "formula": "gross_profit / NULLIF(revenue, 0)",
+      "data_source": "sales_orders o JOIN dim_products p ON o.product_id = p.product_id JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency",
+      "depends_on": ["毛利", "收入"],
+      "time_field": "o.order_date",
+      "filters": ["o.order_status = 'completed'"]
+    },
+    {
       "name": "期间费用",
-      "aliases": ["费用", "总费用"],
-      "definition": "企业日常经营发生的费用，包括研发、销售、管理、财务四大费用",
-      "formula": "SUM(rd_expense + selling_expense + admin_expense + finance_expense)",
-      "data_source": "finance_expenses",
+      "aliases": ["经营费用", "总费用"],
+      "definition": "研发、销售、管理和财务四类总项费用之和，不重复加入销售费用子项",
+      "formula": "SUM(f.rd_expense + f.selling_expense + f.admin_expense + f.finance_expense)",
+      "data_source": "finance_expenses f",
       "depends_on": [],
-      "time_field": "expense_date",
+      "time_field": "f.expense_date",
       "filters": []
     },
     {
       "name": "利润",
       "aliases": ["净利润", "经营利润", "profit"],
-      "definition": "企业经营利润，等于毛利减去期间费用",
-      "formula": "gross_profit - total_expense",
-      "data_source": "需跨 sales_orders、dim_products、exchange_rates、finance_expenses",
+      "definition": "毛利减去期间费用，销售与费用必须使用一致的时间粒度",
+      "formula": "gross_profit - period_expense",
+      "data_source": "sales_orders、dim_products、exchange_rates 与 finance_expenses 分别按同一时间粒度聚合后关联",
       "depends_on": ["毛利", "期间费用"],
-      "time_field": "o.order_date / expense_date",
+      "time_field": "sales_orders.order_date / finance_expenses.expense_date",
+      "filters": ["sales_orders.order_status = 'completed'"]
+    },
+    {
+      "name": "利润率",
+      "aliases": ["净利率", "经营利润率", "profit_margin"],
+      "definition": "利润占人民币销售收入的比例",
+      "formula": "profit / NULLIF(revenue, 0)",
+      "data_source": "sales_orders、dim_products、exchange_rates 与 finance_expenses 分别按同一时间粒度聚合后关联",
+      "depends_on": ["利润", "收入"],
+      "time_field": "sales_orders.order_date / finance_expenses.expense_date",
+      "filters": ["sales_orders.order_status = 'completed'"]
+    },
+    {
+      "name": "完成订单数",
+      "aliases": ["已完成订单数", "成交订单数"],
+      "definition": "状态为 completed 的销售订单数量",
+      "formula": "COUNT(DISTINCT o.order_id)",
+      "data_source": "sales_orders o",
+      "depends_on": [],
+      "time_field": "o.order_date",
       "filters": ["o.order_status = 'completed'"]
+    },
+    {
+      "name": "销售数量",
+      "aliases": ["销量", "已售数量"],
+      "definition": "已完成销售订单的商品数量之和",
+      "formula": "SUM(o.quantity)",
+      "data_source": "sales_orders o",
+      "depends_on": [],
+      "time_field": "o.order_date",
+      "filters": ["o.order_status = 'completed'"]
+    },
+    {
+      "name": "平均订单金额",
+      "aliases": ["客单价", "平均客单价"],
+      "definition": "已完成订单的人民币收入除以完成订单数",
+      "formula": "revenue / NULLIF(completed_order_count, 0)",
+      "data_source": "sales_orders o JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency",
+      "depends_on": ["收入", "完成订单数"],
+      "time_field": "o.order_date",
+      "filters": ["o.order_status = 'completed'"]
+    },
+    {
+      "name": "平均销售单价",
+      "aliases": ["平均售价", "销售均价"],
+      "definition": "已完成订单的人民币收入除以销售数量",
+      "formula": "revenue / NULLIF(sales_quantity, 0)",
+      "data_source": "sales_orders o JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency",
+      "depends_on": ["收入", "销售数量"],
+      "time_field": "o.order_date",
+      "filters": ["o.order_status = 'completed'"]
+    },
+    {
+      "name": "销售折扣金额",
+      "aliases": ["订单折扣", "销售折扣"],
+      "definition": "已完成销售订单的折扣金额之和，原币口径必须按币种分组",
+      "formula": "SUM(o.discount_amount)",
+      "data_source": "sales_orders o",
+      "depends_on": [],
+      "time_field": "o.order_date",
+      "filters": ["o.order_status = 'completed'", "跨币种汇总时按 o.currency 分组"]
+    },
+    {
+      "name": "成交客户数",
+      "aliases": ["购买客户数", "成交客户数量"],
+      "definition": "已完成订单中的去重客户数量",
+      "formula": "COUNT(DISTINCT o.customer_id)",
+      "data_source": "sales_orders o",
+      "depends_on": [],
+      "time_field": "o.order_date",
+      "filters": ["o.order_status = 'completed'"]
+    },
+    {
+      "name": "采购金额",
+      "aliases": ["采购总额", "采购订单金额"],
+      "definition": "采购订单总金额，原币口径；跨币种分析必须按 currency 分组，禁止直接相加",
+      "formula": "SUM(po.total_amount)",
+      "data_source": "purchase_orders po",
+      "depends_on": [],
+      "time_field": "po.order_date",
+      "filters": ["跨币种汇总时按 po.currency 分组"]
+    },
+    {
+      "name": "采购订单数",
+      "aliases": ["采购单数", "采购订单数量"],
+      "definition": "采购订单去重数量",
+      "formula": "COUNT(DISTINCT po.purchase_order_id)",
+      "data_source": "purchase_orders po",
+      "depends_on": [],
+      "time_field": "po.order_date",
+      "filters": []
+    },
+    {
+      "name": "采购数量",
+      "aliases": ["订购数量", "采购订购量"],
+      "definition": "采购订单明细的订购数量之和",
+      "formula": "SUM(poi.quantity)",
+      "data_source": "purchase_order_items poi JOIN purchase_orders po ON poi.purchase_order_id = po.purchase_order_id",
+      "depends_on": [],
+      "time_field": "po.order_date",
+      "filters": []
+    },
+    {
+      "name": "已收货数量",
+      "aliases": ["收货数量", "采购到货量"],
+      "definition": "采购订单明细中已经收货的数量之和",
+      "formula": "SUM(poi.received_quantity)",
+      "data_source": "purchase_order_items poi JOIN purchase_orders po ON poi.purchase_order_id = po.purchase_order_id",
+      "depends_on": [],
+      "time_field": "po.order_date",
+      "filters": []
+    },
+    {
+      "name": "采购收货率",
+      "aliases": ["采购到货率", "收货完成率"],
+      "definition": "已收货数量占采购数量的比例",
+      "formula": "received_quantity / NULLIF(purchase_quantity, 0)",
+      "data_source": "purchase_order_items poi JOIN purchase_orders po ON poi.purchase_order_id = po.purchase_order_id",
+      "depends_on": ["已收货数量", "采购数量"],
+      "time_field": "po.order_date",
+      "filters": []
+    },
+    {
+      "name": "平均采购单价",
+      "aliases": ["采购均价", "平均采购价格"],
+      "definition": "采购明细金额除以采购数量，跨币种分析必须按采购订单币种分组",
+      "formula": "SUM(poi.quantity * poi.unit_cost) / NULLIF(SUM(poi.quantity), 0)",
+      "data_source": "purchase_order_items poi JOIN purchase_orders po ON poi.purchase_order_id = po.purchase_order_id",
+      "depends_on": [],
+      "time_field": "po.order_date",
+      "filters": ["跨币种汇总时按 po.currency 分组"]
+    },
+    {
+      "name": "活跃供应商数",
+      "aliases": ["有效供应商数", "合作供应商数"],
+      "definition": "状态为 active 的供应商数量",
+      "formula": "COUNT(DISTINCT s.supplier_id)",
+      "data_source": "dim_suppliers s",
+      "depends_on": [],
+      "time_field": "无固定时间字段（当前快照）",
+      "filters": ["s.supplier_status = 'active'"]
+    },
+    {
+      "name": "供应商平均评分",
+      "aliases": ["平均供应商评分", "供应商评级"],
+      "definition": "供应商 rating 字段的平均值",
+      "formula": "AVG(s.rating)",
+      "data_source": "dim_suppliers s",
+      "depends_on": [],
+      "time_field": "无固定时间字段（当前快照）",
+      "filters": []
+    },
+    {
+      "name": "库存数量",
+      "aliases": ["库存量", "现存量"],
+      "definition": "指定库存快照日的账面现存数量之和",
+      "formula": "SUM(ib.quantity_on_hand)",
+      "data_source": "inventory_balances ib",
+      "depends_on": [],
+      "time_field": "ib.snapshot_date",
+      "filters": ["未指定日期时使用 MAX(snapshot_date) 的最新快照"]
+    },
+    {
+      "name": "预留库存数量",
+      "aliases": ["库存预留量", "预留数量"],
+      "definition": "指定库存快照日已被业务预留的库存数量",
+      "formula": "SUM(ib.quantity_reserved)",
+      "data_source": "inventory_balances ib",
+      "depends_on": [],
+      "time_field": "ib.snapshot_date",
+      "filters": ["未指定日期时使用 MAX(snapshot_date) 的最新快照"]
+    },
+    {
+      "name": "可用库存",
+      "aliases": ["可售库存", "可用库存数量"],
+      "definition": "账面现存数量减去预留库存数量",
+      "formula": "SUM(ib.quantity_on_hand - ib.quantity_reserved)",
+      "data_source": "inventory_balances ib",
+      "depends_on": ["库存数量", "预留库存数量"],
+      "time_field": "ib.snapshot_date",
+      "filters": ["未指定日期时使用 MAX(snapshot_date) 的最新快照"]
+    },
+    {
+      "name": "库存金额",
+      "aliases": ["库存价值", "存货金额"],
+      "definition": "指定库存快照日的库存价值之和",
+      "formula": "SUM(ib.inventory_value)",
+      "data_source": "inventory_balances ib",
+      "depends_on": [],
+      "time_field": "ib.snapshot_date",
+      "filters": ["未指定日期时使用 MAX(snapshot_date) 的最新快照"]
+    },
+    {
+      "name": "库存预留率",
+      "aliases": ["预留率", "库存占用率"],
+      "definition": "预留库存数量占库存数量的比例",
+      "formula": "reserved_inventory / NULLIF(on_hand_inventory, 0)",
+      "data_source": "inventory_balances ib",
+      "depends_on": ["预留库存数量", "库存数量"],
+      "time_field": "ib.snapshot_date",
+      "filters": ["未指定日期时使用 MAX(snapshot_date) 的最新快照"]
+    },
+    {
+      "name": "入库数量",
+      "aliases": ["入库量", "库存入库量"],
+      "definition": "库存流水中 transaction_type 为 inbound 的正向数量之和",
+      "formula": "SUM(it.quantity)",
+      "data_source": "inventory_transactions it",
+      "depends_on": [],
+      "time_field": "it.transaction_date",
+      "filters": ["it.transaction_type = 'inbound'"]
+    },
+    {
+      "name": "出库数量",
+      "aliases": ["出库量", "库存出库量"],
+      "definition": "库存流水中 transaction_type 为 outbound 的绝对数量之和",
+      "formula": "SUM(ABS(it.quantity))",
+      "data_source": "inventory_transactions it",
+      "depends_on": [],
+      "time_field": "it.transaction_date",
+      "filters": ["it.transaction_type = 'outbound'"]
+    },
+    {
+      "name": "计划生产数量",
+      "aliases": ["计划产量", "生产计划量"],
+      "definition": "生产工单计划数量之和",
+      "formula": "SUM(mo.planned_quantity)",
+      "data_source": "production_orders mo",
+      "depends_on": [],
+      "time_field": "mo.start_date",
+      "filters": []
+    },
+    {
+      "name": "实际产出数量",
+      "aliases": ["实际产量", "生产产出量"],
+      "definition": "生产产出中良品数量与不良品数量之和",
+      "formula": "SUM(prod_out.good_quantity + prod_out.defect_quantity)",
+      "data_source": "production_outputs prod_out JOIN production_orders mo ON prod_out.production_order_id = mo.production_order_id",
+      "depends_on": [],
+      "time_field": "prod_out.output_date",
+      "filters": []
+    },
+    {
+      "name": "良品数量",
+      "aliases": ["良品产量", "合格产出量"],
+      "definition": "生产产出中的良品数量之和",
+      "formula": "SUM(prod_out.good_quantity)",
+      "data_source": "production_outputs prod_out JOIN production_orders mo ON prod_out.production_order_id = mo.production_order_id",
+      "depends_on": [],
+      "time_field": "prod_out.output_date",
+      "filters": []
+    },
+    {
+      "name": "不良品数量",
+      "aliases": ["不良数量", "生产缺陷数量"],
+      "definition": "生产产出中的不良品数量之和",
+      "formula": "SUM(prod_out.defect_quantity)",
+      "data_source": "production_outputs prod_out JOIN production_orders mo ON prod_out.production_order_id = mo.production_order_id",
+      "depends_on": [],
+      "time_field": "prod_out.output_date",
+      "filters": []
+    },
+    {
+      "name": "生产完成率",
+      "aliases": ["产量完成率", "生产达成率"],
+      "definition": "实际产出数量占计划生产数量的比例",
+      "formula": "actual_output_quantity / NULLIF(planned_production_quantity, 0)",
+      "data_source": "production_orders mo LEFT JOIN production_outputs prod_out ON mo.production_order_id = prod_out.production_order_id",
+      "depends_on": ["实际产出数量", "计划生产数量"],
+      "time_field": "mo.start_date / prod_out.output_date",
+      "filters": []
+    },
+    {
+      "name": "生产良率",
+      "aliases": ["产出良率", "制造良率"],
+      "definition": "良品数量占实际产出数量的比例",
+      "formula": "good_quantity / NULLIF(actual_output_quantity, 0)",
+      "data_source": "production_outputs prod_out JOIN production_orders mo ON prod_out.production_order_id = mo.production_order_id",
+      "depends_on": ["良品数量", "实际产出数量"],
+      "time_field": "prod_out.output_date",
+      "filters": []
+    },
+    {
+      "name": "检验数量",
+      "aliases": ["质检数量", "受检数量"],
+      "definition": "质量检验记录中的检验数量之和",
+      "formula": "SUM(qi.inspected_quantity)",
+      "data_source": "quality_inspections qi JOIN production_orders mo ON qi.production_order_id = mo.production_order_id",
+      "depends_on": [],
+      "time_field": "qi.inspection_date",
+      "filters": []
+    },
+    {
+      "name": "检验合格数量",
+      "aliases": ["质检合格数", "检验通过数量"],
+      "definition": "质量检验记录中的合格数量之和",
+      "formula": "SUM(qi.passed_quantity)",
+      "data_source": "quality_inspections qi JOIN production_orders mo ON qi.production_order_id = mo.production_order_id",
+      "depends_on": [],
+      "time_field": "qi.inspection_date",
+      "filters": []
+    },
+    {
+      "name": "检验合格率",
+      "aliases": ["质检合格率", "检验通过率"],
+      "definition": "检验合格数量占检验数量的比例",
+      "formula": "passed_inspection_quantity / NULLIF(inspected_quantity, 0)",
+      "data_source": "quality_inspections qi JOIN production_orders mo ON qi.production_order_id = mo.production_order_id",
+      "depends_on": ["检验合格数量", "检验数量"],
+      "time_field": "qi.inspection_date",
+      "filters": []
+    },
+    {
+      "name": "检验缺陷率",
+      "aliases": ["质检缺陷率", "检验不合格率"],
+      "definition": "检验数量减合格数量后，占检验数量的比例",
+      "formula": "(inspected_quantity - passed_inspection_quantity) / NULLIF(inspected_quantity, 0)",
+      "data_source": "quality_inspections qi JOIN production_orders mo ON qi.production_order_id = mo.production_order_id",
+      "depends_on": ["检验数量", "检验合格数量"],
+      "time_field": "qi.inspection_date",
+      "filters": []
+    },
+    {
+      "name": "设备数量",
+      "aliases": ["设备台数", "设备总数"],
+      "definition": "设备台账中的设备数量",
+      "formula": "COUNT(DISTINCT e.equipment_id)",
+      "data_source": "equipment e",
+      "depends_on": [],
+      "time_field": "e.purchase_date",
+      "filters": []
+    },
+    {
+      "name": "在运设备数量",
+      "aliases": ["运行设备数", "正常运行设备数"],
+      "definition": "状态为 running 的设备数量",
+      "formula": "COUNT(DISTINCT e.equipment_id)",
+      "data_source": "equipment e",
+      "depends_on": [],
+      "time_field": "e.purchase_date",
+      "filters": ["e.equipment_status = 'running'"]
+    },
+    {
+      "name": "设备维护次数",
+      "aliases": ["维护次数", "维修次数"],
+      "definition": "设备维护记录数量",
+      "formula": "COUNT(DISTINCT em.maintenance_id)",
+      "data_source": "equipment_maintenance em JOIN equipment e ON em.equipment_id = e.equipment_id",
+      "depends_on": [],
+      "time_field": "em.maintenance_date",
+      "filters": []
+    },
+    {
+      "name": "设备维护成本",
+      "aliases": ["维护成本", "维修成本"],
+      "definition": "设备维护记录中的维护成本之和",
+      "formula": "SUM(em.maintenance_cost)",
+      "data_source": "equipment_maintenance em JOIN equipment e ON em.equipment_id = e.equipment_id",
+      "depends_on": [],
+      "time_field": "em.maintenance_date",
+      "filters": []
+    },
+    {
+      "name": "设备停机时长",
+      "aliases": ["停机时长", "维护停机时间"],
+      "definition": "设备维护导致的停机小时数之和",
+      "formula": "SUM(em.downtime_hours)",
+      "data_source": "equipment_maintenance em JOIN equipment e ON em.equipment_id = e.equipment_id",
+      "depends_on": [],
+      "time_field": "em.maintenance_date",
+      "filters": []
+    },
+    {
+      "name": "发运单数",
+      "aliases": ["发货单数", "发运次数"],
+      "definition": "发运单的去重数量",
+      "formula": "COUNT(DISTINCT sh.shipment_id)",
+      "data_source": "shipments sh",
+      "depends_on": [],
+      "time_field": "sh.shipment_date",
+      "filters": []
+    },
+    {
+      "name": "发运数量",
+      "aliases": ["发货数量", "已发数量"],
+      "definition": "发运明细中的发货数量之和",
+      "formula": "SUM(si.shipped_quantity)",
+      "data_source": "shipment_items si JOIN shipments sh ON si.shipment_id = sh.shipment_id",
+      "depends_on": [],
+      "time_field": "sh.shipment_date",
+      "filters": []
+    },
+    {
+      "name": "运费",
+      "aliases": ["物流运费", "运输费用"],
+      "definition": "发运单中的运费之和",
+      "formula": "SUM(sh.freight_cost)",
+      "data_source": "shipments sh",
+      "depends_on": [],
+      "time_field": "sh.shipment_date",
+      "filters": []
+    },
+    {
+      "name": "客户回款金额",
+      "aliases": ["回款金额", "销售回款"],
+      "definition": "已收到和部分收到的客户付款金额，原币口径；跨币种必须按 currency 分组",
+      "formula": "SUM(cp.payment_amount)",
+      "data_source": "customer_payments cp JOIN sales_orders o ON cp.order_id = o.order_id",
+      "depends_on": [],
+      "time_field": "cp.payment_date",
+      "filters": ["cp.payment_status IN ('received', 'partial')", "跨币种汇总时按 cp.currency 分组"]
+    },
+    {
+      "name": "客户回款率",
+      "aliases": ["销售回款率", "应收回款率"],
+      "definition": "客户回款金额占对应销售订单不含税金额的比例，按相同订单和币种计算",
+      "formula": "SUM(cp.payment_amount) / NULLIF(SUM(o.net_amount), 0)",
+      "data_source": "customer_payments cp JOIN sales_orders o ON cp.order_id = o.order_id",
+      "depends_on": ["客户回款金额"],
+      "time_field": "cp.payment_date",
+      "filters": ["cp.payment_status IN ('received', 'partial')", "o.order_status = 'completed'", "跨币种汇总时按 cp.currency 分组"]
+    },
+    {
+      "name": "供应商付款金额",
+      "aliases": ["采购付款金额", "应付金额"],
+      "definition": "已支付和部分支付的供应商付款金额，原币口径；跨币种必须按 currency 分组",
+      "formula": "SUM(sp.payment_amount)",
+      "data_source": "supplier_payments sp JOIN purchase_orders po ON sp.purchase_order_id = po.purchase_order_id",
+      "depends_on": [],
+      "time_field": "sp.payment_date",
+      "filters": ["sp.payment_status IN ('paid', 'partial')", "跨币种汇总时按 sp.currency 分组"]
+    },
+    {
+      "name": "采购付款率",
+      "aliases": ["供应商付款率", "应付支付率"],
+      "definition": "供应商付款金额占对应采购订单金额的比例，按相同采购订单和币种计算",
+      "formula": "SUM(sp.payment_amount) / NULLIF(SUM(po.total_amount), 0)",
+      "data_source": "supplier_payments sp JOIN purchase_orders po ON sp.purchase_order_id = po.purchase_order_id",
+      "depends_on": ["供应商付款金额"],
+      "time_field": "sp.payment_date",
+      "filters": ["sp.payment_status IN ('paid', 'partial')", "跨币种汇总时按 sp.currency 分组"]
+    },
+    {
+      "name": "预算金额",
+      "aliases": ["月度预算", "预算总额"],
+      "definition": "预算记录中的预算金额之和",
+      "formula": "SUM(b.budget_amount)",
+      "data_source": "budgets b JOIN dim_cost_centers cc ON b.cost_center_id = cc.cost_center_id",
+      "depends_on": [],
+      "time_field": "b.budget_year / b.budget_month",
+      "filters": []
+    },
+    {
+      "name": "实际发生金额",
+      "aliases": ["预算实际金额", "实际支出"],
+      "definition": "预算记录中的实际发生金额之和",
+      "formula": "SUM(b.actual_amount)",
+      "data_source": "budgets b JOIN dim_cost_centers cc ON b.cost_center_id = cc.cost_center_id",
+      "depends_on": [],
+      "time_field": "b.budget_year / b.budget_month",
+      "filters": []
+    },
+    {
+      "name": "预算差异",
+      "aliases": ["预算偏差", "预算结余"],
+      "definition": "预算金额减去实际发生金额；正数为结余，负数为超支",
+      "formula": "budget_amount - actual_amount",
+      "data_source": "budgets b JOIN dim_cost_centers cc ON b.cost_center_id = cc.cost_center_id",
+      "depends_on": ["预算金额", "实际发生金额"],
+      "time_field": "b.budget_year / b.budget_month",
+      "filters": []
+    },
+    {
+      "name": "预算执行率",
+      "aliases": ["预算使用率", "预算达成率"],
+      "definition": "实际发生金额占预算金额的比例",
+      "formula": "actual_amount / NULLIF(budget_amount, 0)",
+      "data_source": "budgets b JOIN dim_cost_centers cc ON b.cost_center_id = cc.cost_center_id",
+      "depends_on": ["实际发生金额", "预算金额"],
+      "time_field": "b.budget_year / b.budget_month",
+      "filters": []
+    },
+    {
+      "name": "员工人数",
+      "aliases": ["员工总数", "人员数量"],
+      "definition": "员工维度表中的员工数量",
+      "formula": "COUNT(DISTINCT e.employee_id)",
+      "data_source": "dim_employees e JOIN dim_departments d ON e.department_id = d.department_id",
+      "depends_on": [],
+      "time_field": "e.hire_date",
+      "filters": []
+    },
+    {
+      "name": "在职员工数",
+      "aliases": ["在岗人数", "在职人数"],
+      "definition": "状态为 active 的员工数量",
+      "formula": "COUNT(DISTINCT e.employee_id)",
+      "data_source": "dim_employees e JOIN dim_departments d ON e.department_id = d.department_id",
+      "depends_on": [],
+      "time_field": "e.hire_date",
+      "filters": ["e.employee_status = 'active'"]
+    },
+    {
+      "name": "仓库容量",
+      "aliases": ["仓储容量", "总仓容"],
+      "definition": "仓库维度表中的容量之和，单位 MWh",
+      "formula": "SUM(w.capacity_mwh)",
+      "data_source": "dim_warehouses w",
+      "depends_on": [],
+      "time_field": "无固定时间字段（当前快照）",
+      "filters": ["w.warehouse_status = 'active'"]
+    },
+    {
+      "name": "成本中心年度预算",
+      "aliases": ["年度预算", "成本中心预算"],
+      "definition": "成本中心维度中配置的年度预算之和",
+      "formula": "SUM(cc.annual_budget)",
+      "data_source": "dim_cost_centers cc JOIN dim_departments d ON cc.department_id = d.department_id",
+      "depends_on": [],
+      "time_field": "无固定时间字段（年度配置快照）",
+      "filters": []
+    },
+    {
+      "name": "销售渠道数",
+      "aliases": ["渠道数量", "销售渠道数量"],
+      "definition": "销售渠道维度表中的渠道数量",
+      "formula": "COUNT(DISTINCT sc.channel_id)",
+      "data_source": "dim_sales_channels sc",
+      "depends_on": [],
+      "time_field": "无固定时间字段（当前快照）",
+      "filters": []
+    },
+    {
+      "name": "工作日数",
+      "aliases": ["工作天数", "有效工作日"],
+      "definition": "日历维度中标记为工作日的日期数量",
+      "formula": "COUNT(DISTINCT c.calendar_date)",
+      "data_source": "dim_calendar c",
+      "depends_on": [],
+      "time_field": "c.calendar_date",
+      "filters": ["c.is_workday = TRUE"]
+    },
+    {
+      "name": "客户总数",
+      "aliases": ["客户数量", "客户规模"],
+      "definition": "客户维度表中的客户总数量，不要求客户已经成交",
+      "formula": "COUNT(DISTINCT c.customer_id)",
+      "data_source": "dim_customers c",
+      "depends_on": [],
+      "time_field": "无固定时间字段（当前快照）",
+      "filters": []
     }
   ]
 }

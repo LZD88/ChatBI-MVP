@@ -9,23 +9,33 @@ LLM 客户端模块
 """
 
 import re
-from typing import Generator
-from openai import OpenAI
-from config import LLM_CONFIG
+from typing import Any, Generator
+
+import sqlglot
+from openai import APIConnectionError, APITimeoutError, OpenAI, OpenAIError
+
+from chatbi.domain.errors import ChatBIError, ErrorCode
+from chatbi.settings import Settings, get_settings
 
 
 class LLMClient:
     """LLM API 客户端"""
 
-    def __init__(self):
-        self.client = OpenAI(
-            api_key=LLM_CONFIG["api_key"],
-            base_url=LLM_CONFIG["base_url"]
-        )
-        self.model = LLM_CONFIG["model"]
-        self.embedding_model = LLM_CONFIG["embedding_model"]
-        self.temperature = LLM_CONFIG["temperature"]
-        self.max_tokens = LLM_CONFIG["max_tokens"]
+    def __init__(self, settings: Settings | None = None, client: Any | None = None):
+        self.settings = settings or get_settings()
+        if client is None:
+            if self.settings.openai_api_key is None:
+                raise ValueError("OPENAI_API_KEY is required to create LLMClient")
+            client = OpenAI(
+                api_key=self.settings.openai_api_key.get_secret_value(),
+                base_url=self.settings.openai_base_url,
+                timeout=self.settings.llm_timeout_seconds,
+            )
+        self.client = client
+        self.model = self.settings.llm_model
+        self.embedding_model = self.settings.embedding_model
+        self.temperature = self.settings.llm_temperature
+        self.max_tokens = self.settings.llm_max_tokens
 
     def generate_sql(self, system_msg: str, prompt: str) -> str:
         """
@@ -39,11 +49,25 @@ class LLMClient:
             提取后的纯 SQL 字符串
         """
         raw_output = self.generate_text(system_msg=system_msg, prompt=prompt)
+        return self.extract_sql(raw_output)
 
-        # 提取 SQL：去除 markdown 代码块标记
-        sql = re.sub(r'```sql|```', '', raw_output).strip()
-
-        return sql
+    @staticmethod
+    def extract_sql(raw_output: str | None) -> str:
+        if not raw_output or not raw_output.strip():
+            raise ChatBIError(ErrorCode.MODEL_OUTPUT_INVALID)
+        fenced = re.search(r"```(?:sql)?\s*(.*?)```", raw_output, re.IGNORECASE | re.DOTALL)
+        candidate = fenced.group(1).strip() if fenced else raw_output.strip()
+        start = re.search(r"\b(?:WITH|SELECT)\b", candidate, re.IGNORECASE)
+        if not start:
+            raise ChatBIError(ErrorCode.MODEL_OUTPUT_INVALID)
+        candidate = candidate[start.start():].strip()
+        try:
+            statements = sqlglot.parse(candidate, read="mysql")
+        except Exception as exc:
+            raise ChatBIError(ErrorCode.MODEL_OUTPUT_INVALID) from exc
+        if len(statements) != 1 or statements[0] is None:
+            raise ChatBIError(ErrorCode.MODEL_OUTPUT_INVALID)
+        return statements[0].sql(dialect="mysql")
 
     def generate_text(self, system_msg: str, prompt: str) -> str:
         """
@@ -56,16 +80,20 @@ class LLMClient:
         Returns:
             模型返回的原始文本内容
         """
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=self.temperature,
-            max_tokens=self.max_tokens
-        )
-        return response.choices[0].message.content.strip()
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=self.temperature,
+                max_tokens=self.max_tokens
+            )
+            content = response.choices[0].message.content
+            return content.strip() if content else ""
+        except (APITimeoutError, APIConnectionError, OpenAIError) as exc:
+            raise ChatBIError(ErrorCode.MODEL_UNAVAILABLE) from exc
 
     def generate_sql_stream(self, system_msg: str, prompt: str) -> Generator[str, None, None]:
         """
