@@ -15,6 +15,7 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from config import LLM_CONFIG
+from chatbi.settings import get_settings
 from table_retriever import retrieve_tables
 
 
@@ -483,7 +484,7 @@ BUSINESS_RULES = [
 
 
 # ==================== ChromaDB 配置 ====================
-CHROMA_PERSIST_DIR = os.path.join(os.path.dirname(__file__), "chroma_db", "fields")
+CHROMA_PERSIST_DIR = str(get_settings().chroma_persist_dir / "fields")
 
 
 def _cosine_relevance_score_fn(distance: float) -> float:
@@ -527,16 +528,16 @@ def build_field_index(force_rebuild: bool = False) -> Chroma:
         Chroma 向量存储实例
     """
     vectorstore = get_vectorstore()
-    existing = vectorstore._collection.count()
+    existing_ids = vectorstore.get(include=[]).get("ids", [])
+    existing = len(existing_ids)
 
     if existing > 0 and not force_rebuild:
         print(f"字段索引已存在（{existing} 条），跳过重建。如需重建请传入 force_rebuild=True")
         return vectorstore
 
     if force_rebuild and existing > 0:
-        existing_ids = vectorstore._collection.get()["ids"]
         if existing_ids:
-            vectorstore._collection.delete(ids=existing_ids)
+            vectorstore.delete(ids=existing_ids)
         print("已清空旧字段索引数据")
 
     # 构建 Document 列表

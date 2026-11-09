@@ -13,6 +13,7 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from config import LLM_CONFIG
+from chatbi.settings import get_settings
 
 
 # ==================== 表描述数据 ====================
@@ -106,7 +107,7 @@ TABLE_METADATA = {
 
 
 # ==================== ChromaDB 持久化目录 ====================
-CHROMA_PERSIST_DIR = os.path.join(os.path.dirname(__file__), "chroma_db", "tables")
+CHROMA_PERSIST_DIR = str(get_settings().chroma_persist_dir / "tables")
 
 
 def _cosine_relevance_score_fn(distance: float) -> float:
@@ -163,7 +164,8 @@ def build_index(force_rebuild: bool = False) -> Chroma:
     vectorstore = get_vectorstore()
 
     # 检查是否已有数据
-    existing = vectorstore._collection.count()
+    existing_ids = vectorstore.get(include=[]).get("ids", [])
+    existing = len(existing_ids)
     if existing > 0 and not force_rebuild:
         print(f"已有索引数据（{existing} 条），跳过重建。如需重建请传入 force_rebuild=True")
         return vectorstore
@@ -171,9 +173,8 @@ def build_index(force_rebuild: bool = False) -> Chroma:
     # 清空旧数据（如果 force_rebuild）
     if force_rebuild and existing > 0:
         # ChromaDB 较新版本不支持空 where 过滤，用 delete 逐个删除
-        existing_ids = vectorstore._collection.get()["ids"]
         if existing_ids:
-            vectorstore._collection.delete(ids=existing_ids)
+            vectorstore.delete(ids=existing_ids)
         print("已清空旧索引数据")
 
     # 构建 Document 列表
