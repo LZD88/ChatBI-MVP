@@ -1,14 +1,10 @@
-import langchain
-from dotenv import load_dotenv
-load_dotenv()
-langchain
+"""Compatibility entrypoint for running the ChatBI MVP."""
 
-import os
+from chatbi.api.app import run
 
-print(os.environ.get("DB_NAME"))
 
-def main():
-    print("Hello from chatbi-project!")
+def main() -> None:
+    run()
 
 
 if __name__ == "__main__":
