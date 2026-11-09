@@ -1,0 +1,70 @@
+{
+  "version": "1.0.1",
+  "database_snapshot": "chatbi-mvp-seed-2026-11-09",
+  "cases": [
+    {
+      "id": "simple-completed-order-count",
+      "question": "已完成订单一共有多少笔？",
+      "category": "simple_aggregation",
+      "difficulty": "simple",
+      "business_definition": "仅统计 order_status 为 completed 的订单数量。",
+      "expected_sql": "SELECT COUNT(*) AS completed_order_count FROM sales_orders WHERE order_status = 'completed'"
+    },
+    {
+      "id": "dynamic-recent-three-month-revenue",
+      "question": "最近三个月各月销售收入是多少？",
+      "category": "dynamic_time",
+      "difficulty": "medium",
+      "business_definition": "收入使用 net_amount，仅含已完成订单，并按订单日汇率折算人民币；最近三个月以 CURDATE 动态计算。",
+      "expected_sql": "SELECT DATE_FORMAT(o.order_date, '%Y-%m-01') AS month, SUM(o.net_amount * r.rate_to_cny) AS revenue_cny FROM sales_orders o JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency WHERE o.order_status = 'completed' AND o.order_date >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH) AND o.order_date < CURDATE() + INTERVAL 1 DAY GROUP BY DATE_FORMAT(o.order_date, '%Y-%m-01') ORDER BY month"
+    },
+    {
+      "id": "join-orders-by-customer-type",
+      "question": "按客户类型统计已完成订单数量。",
+      "category": "multi_table_join",
+      "difficulty": "medium",
+      "business_definition": "通过 customer_id 关联客户维表，并排除取消和待处理订单。",
+      "expected_sql": "SELECT c.customer_type, COUNT(*) AS order_count FROM sales_orders o JOIN dim_customers c ON o.customer_id = c.customer_id WHERE o.order_status = 'completed' GROUP BY c.customer_type ORDER BY c.customer_type"
+    },
+    {
+      "id": "revenue-total-cny",
+      "question": "全部已完成订单的销售额是多少人民币？",
+      "category": "revenue",
+      "difficulty": "medium",
+      "business_definition": "销售额使用不含税 net_amount，仅含已完成订单，并按订单日期和币种关联汇率折算人民币。",
+      "expected_sql": "SELECT SUM(o.net_amount * r.rate_to_cny) AS revenue_cny FROM sales_orders o JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency WHERE o.order_status = 'completed'"
+    },
+    {
+      "id": "cost-total",
+      "question": "全部已完成订单的销售成本是多少？",
+      "category": "cost",
+      "difficulty": "medium",
+      "business_definition": "销售成本为材料成本与人工成本之和乘以已售数量，仅含已完成订单。",
+      "expected_sql": "SELECT SUM((p.material_cost + p.labor_cost) * o.quantity) AS sales_cost FROM sales_orders o JOIN dim_products p ON o.product_id = p.product_id WHERE o.order_status = 'completed'"
+    },
+    {
+      "id": "gross-profit-by-product-line",
+      "question": "各产品线的毛利是多少？",
+      "category": "gross_profit",
+      "difficulty": "complex",
+      "business_definition": "毛利为人民币销售收入减销售成本，仅含已完成订单，并按产品线聚合。",
+      "expected_sql": "SELECT p.product_line, SUM(o.net_amount * r.rate_to_cny - (p.material_cost + p.labor_cost) * o.quantity) AS gross_profit FROM sales_orders o JOIN dim_products p ON o.product_id = p.product_id JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency WHERE o.order_status = 'completed' GROUP BY p.product_line ORDER BY p.product_line"
+    },
+    {
+      "id": "expenses-q3-2026",
+      "question": "2026年第三季度的期间费用是多少？",
+      "category": "expenses",
+      "difficulty": "simple",
+      "business_definition": "期间费用只汇总研发、销售、管理和财务四个总项，不重复加入销售费用子项。",
+      "expected_sql": "SELECT SUM(rd_expense + selling_expense + admin_expense + finance_expense) AS period_expense FROM finance_expenses WHERE expense_date >= '2026-07-01' AND expense_date < '2026-10-01'"
+    },
+    {
+      "id": "revenue-by-region",
+      "question": "按地区统计已完成订单的销售额。",
+      "category": "revenue",
+      "difficulty": "medium",
+      "business_definition": "销售额使用不含税 net_amount，按汇率折算人民币，仅含已完成订单，并按地区聚合。",
+      "expected_sql": "SELECT o.region, SUM(o.net_amount * r.rate_to_cny) AS revenue_cny FROM sales_orders o JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency WHERE o.order_status = 'completed' GROUP BY o.region ORDER BY o.region"
+    }
+  ]
+}
