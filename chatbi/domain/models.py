@@ -52,3 +52,7 @@ class QueryResult:
     report_markdown: str | None = None
     report_source: str | None = None
     agent_timings_ms: dict[str, float] = field(default_factory=dict)
+    validation: dict[str, Any] = field(default_factory=dict)
+    analysis_context: dict[str, Any] = field(default_factory=dict)
+    retrieval_diagnostics: dict[str, Any] = field(default_factory=dict)
+    message: str | None = None
