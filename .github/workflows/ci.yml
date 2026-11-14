@@ -1,0 +1,53 @@
+name: Code quality
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: code-quality-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows-launcher:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Launcher contracts (mock processes, no services started)
+        shell: pwsh
+        run: ./scripts/test_launcher.ps1
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: uv sync --frozen
+      - name: Basic secret scan
+        run: uv run python scripts/scan_secrets.py
+      - name: Backend unit tests
+        run: uv run pytest -q --junitxml=reports/unit-tests.xml
+      - run: uv run mypy chatbi
+      - run: node --test tests/*.test.mjs
+      - run: git diff --check
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-results
+          path: reports/unit-tests.xml
+          retention-days: 14
