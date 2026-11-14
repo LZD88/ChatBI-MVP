@@ -17,6 +17,7 @@ htmlcov/
 chroma_db/
 reports/*.json
 reports/*.html
+reports/*.xml
 .runtime/
 .agents/
 
