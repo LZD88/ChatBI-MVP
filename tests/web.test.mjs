@@ -29,6 +29,14 @@ test("renders an explicit empty-result message", () => {
   assert.match(renderResult({ sql: "SELECT 1", columns: [], rows: [], row_count: 0, schema_mode: "semantic" }), /没有匹配数据/);
 });
 
+test("ordinary conversation renders an escaped reply without data analysis UI", () => {
+  const html = renderResult({ query_type: "non_query", message: "你好<script>alert(1)</script>", intent_reason: "普通问候" });
+  assert.match(html, /普通对话/);
+  assert.match(html, /本轮未进入数据分析/);
+  assert.match(html, /你好&lt;script&gt;/);
+  assert.doesNotMatch(html, /<script>|复杂查询|分析完成|SQL|规划 Agent|没有匹配数据/);
+});
+
 test("renders complex agents and escapes report evidence", () => {
   const data = {
     query_type: "complex",
@@ -63,6 +71,25 @@ test("makes legacy complex execution visibly different from three-agent executio
   assert.match(pipeline, /完整安全执行链路/);
   assert.match(pipeline, /4 个阶段已通过/);
   assert.match(pipeline, /证据校验/);
+});
+
+test("renders actionable advice with escaped target, owner and risk", () => {
+  const html = renderAnalysisReport({
+    title: "产品线报告", executive_summary: "存在差异", source: "summary_agent",
+    recommendation_status: "actionable", recommendation_reason: "基于可比结果",
+    recommendations: [{
+      target: '<img src=x onerror="alert(1)">', problem: "毛利率需要复核", owner_role: "产品线负责人",
+      priority: "medium", confidence: "low", action: "复核成本", rationale: "存在横向差异",
+      expected_impact: "定位差异", precondition: "同一币种", risk: "不能证明因果", evidence: [],
+    }],
+  });
+  assert.match(html, /业务建议/);
+  assert.match(html, /产品线负责人/);
+  assert.match(html, /不能证明因果/);
+  assert.doesNotMatch(html, /<img src=x/);
+  assert.match(html, /&lt;img/);
+  const empty = renderAnalysisReport({ title: "报告", executive_summary: "空结果", recommendations: [] });
+  assert.match(empty, /数据不足/);
 });
 
 test("maps stable errors without exposing arbitrary fallback when known", () => {
