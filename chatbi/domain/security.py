@@ -291,8 +291,10 @@ class QuerySecurityManager:
         secured = statement.copy()
         # A scalar aggregate is guaranteed to return one row. Grouped
         # aggregates, however, can still return an unbounded result set.
-        if any(True for _ in secured.find_all(exp.AggFunc)) and not any(
-            select.args.get("group") is not None for select in secured.find_all(exp.Select)
+        if isinstance(secured, exp.Select) and secured.args.get("group") is None and any(
+            aggregate.find_ancestor(exp.Select) is secured
+            and aggregate.find_ancestor(exp.Window) is None
+            for aggregate in secured.find_all(exp.AggFunc)
         ):
             return secured, False
         current_limit = secured.args.get("limit")
