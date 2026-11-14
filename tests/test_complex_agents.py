@@ -27,6 +27,8 @@ def settings(**overrides) -> Settings:
         "feature_complex_plan_execute": True,
         "complex_step_retry": 0,
         "complex_plan_repair_attempts": 0,
+        "complex_core_max_retries": 0,
+        "complex_aux_max_retries": 0,
     }
     values.update(overrides)
     return Settings(**values)
@@ -93,6 +95,28 @@ def test_plan_contract_rejects_duplicate_and_forward_dependencies() -> None:
         plan(step("step_1", depends_on=["step_2"]), step("step_2"))
 
 
+def test_plan_final_result_can_precede_validation_and_must_exist() -> None:
+    payload = plan(step("step_1"), step("step_2", depends_on=["step_1"])).model_dump()
+    payload["final_result_step_id"] = "step_1"
+    assert ComplexQueryPlan.model_validate(payload).final_result_step_id == "step_1"
+    payload["final_result_step_id"] = "step_3"
+    with pytest.raises(ValueError, match="最终数据结果"):
+        ComplexQueryPlan.model_validate(payload)
+
+
+def test_planner_repairs_sql_advice_step_instead_of_querying_it() -> None:
+    invalid = plan().model_dump()
+    invalid["steps"][0]["expected_columns"] = [{
+        "name": "复核建议", "role": "dimension", "data_type": "string", "description": "复核建议文本"
+    }]
+    llm = QueueLLM(texts=[json.dumps(invalid, ensure_ascii=False), plan().model_dump_json()])
+    result = PlannerAgent(llm, settings(complex_plan_repair_attempts=1), IndicatorKnowledge()).plan(
+        "分析收入并给出复核建议", "", "sales_orders", []
+    )
+    assert result.source == "repaired"
+    assert result.steps[0].expected_columns[0].name == "收入"
+
+
 def test_planner_validates_model_plan_and_falls_back_on_unknown_table() -> None:
     valid = plan().model_dump(mode="json")
     llm = QueueLLM(texts=[f"```json\n{json.dumps(valid, ensure_ascii=False)}\n```"])
@@ -104,8 +128,9 @@ def test_planner_validates_model_plan_and_falls_back_on_unknown_table() -> None:
     invalid["steps"] = [dict(valid["steps"][0], required_tables=["secret_table"])]
     fallback = PlannerAgent(
         QueueLLM(texts=[json.dumps(invalid, ensure_ascii=False)]), settings(), IndicatorKnowledge()
-    ).plan("分析收入", "", "sales_orders", [])
+    ).plan("分析收入", "", "sales_orders", ["收入"])
     assert fallback.source == "fallback"
+    assert fallback.steps[0].expected_columns[0].name == "收入"
 
 
 def test_execution_agent_applies_safety_localization_and_dependency_skip() -> None:
@@ -156,11 +181,9 @@ def test_summary_resolves_evidence_value_from_real_cell() -> None:
             "evidence": [{"step_id": "step_1", "row_index": 0, "column": "收入"}],
         }],
         "caveats": ["结果基于当前数据范围。"],
-        "recommendations": [{
-            "action": "保持高收入业务的资源投入。",
-            "rationale": "当前收入结果提供了可核验依据。",
-            "evidence": [{"step_id": "step_1", "row_index": 0, "column": "收入"}],
-        }],
+        "recommendation_status": "insufficient_data",
+        "recommendation_reason": "单个收入数值无法支持具体对象的业务行动。",
+        "recommendations": [],
     }
     report = SummaryAgent(
         QueueLLM(texts=[json.dumps(draft, ensure_ascii=False)]), settings()
@@ -168,6 +191,14 @@ def test_summary_resolves_evidence_value_from_real_cell() -> None:
     assert report.source == "summary_agent"
     assert report.findings[0].evidence[0].value == 9876
     assert "9876" in report.markdown
+
+    # A malformed/truncated first reply must get a bounded contract repair,
+    # with evidence still resolved from the original database cells.
+    repaired = SummaryAgent(
+        QueueLLM(texts=['{"title":', json.dumps(draft, ensure_ascii=False)]), settings()
+    ).summarize("分析收入", plan(), [successful_result(9876)])
+    assert repaired.source == "summary_agent"
+    assert repaired.findings[0].evidence[0].value == 9876
 
 
 def test_summary_invalid_evidence_and_prompt_injection_use_safe_template() -> None:
@@ -187,8 +218,8 @@ def test_summary_invalid_evidence_and_prompt_injection_use_safe_template() -> No
     ).summarize("分析收入", plan(), [successful_result(malicious_value)])
     assert report.source == "template_fallback"
     assert report.findings[0].evidence[0].value == malicious_value
-    assert report.recommendations
-    assert report.recommendations[0].evidence[0].value == malicious_value
+    assert report.recommendation_status == "insufficient_data"
+    assert not report.recommendations
     assert "<script>" not in report.markdown
     assert "&lt;script&gt;" in report.markdown
 
@@ -208,4 +239,4 @@ def test_orchestrator_does_not_generate_report_when_all_steps_fail() -> None:
             question="分析收入", indicator_knowledge="", schema_text="sales_orders",
             detected_indicators=[], request_id="req",
         )
-    assert exc.value.code.value == "sql_rejected"
+    assert exc.value.code.value == "analysis_suspended"
