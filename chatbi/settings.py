@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     app_host: str = "127.0.0.1"
     app_port: int = Field(default=8000, ge=1, le=65535)
     log_level: str = "INFO"
+    metric_registry_path: Path = Path(".runtime/metrics.sqlite3")
+    query_history_path: Path = Path(".runtime/query-history.sqlite3")
+    history_retention: int = Field(default=200, ge=10, le=2000)
+    query_job_capacity: int = Field(default=8, ge=1, le=32)
+    query_total_timeout_seconds: int = Field(default=240, ge=1, le=1800)
 
     openai_api_key: SecretStr | None = None
     openai_base_url: str = "https://api.openai.com/v1"
@@ -73,6 +78,7 @@ class Settings(BaseSettings):
     simple_chroma_port: int = Field(default=18081, ge=1, le=65535)
     simple_chroma_ssl: bool = False
     simple_schema_index_version: str = "3"
+    chinese_embedding_provider: str = "auto"
     simple_indicator_max_distance: float = Field(default=0.80, ge=0.0, le=2.0)
     simple_table_top_k: int = Field(default=5, ge=1, le=15)
     simple_field_top_k: int = Field(default=12, ge=1, le=50)
@@ -88,7 +94,14 @@ class Settings(BaseSettings):
     complex_plan_max_steps: int = Field(default=6, ge=1, le=8)
     complex_plan_repair_attempts: int = Field(default=1, ge=0, le=2)
     complex_summary_rows_per_step: int = Field(default=30, ge=1, le=100)
-    complex_step_retry: int = Field(default=1, ge=0, le=2)
+    complex_summary_repair_attempts: int = Field(default=1, ge=0, le=2)
+    complex_step_retry: int = Field(default=1, ge=0, le=2, description="旧配置兼容；节点重试由 core/aux_max_retries 管理")
+    complex_core_max_retries: int = Field(default=3, ge=0, le=3)
+    complex_aux_max_retries: int = Field(default=1, ge=0, le=3)
+    complex_max_resume_rounds: int = Field(default=3, ge=1, le=10)
+    complex_schema_max_tables: int = Field(default=12, ge=1, le=20)
+    complex_dependency_max_rows: int = Field(default=200, ge=1, le=500)
+    complex_dependency_max_cells: int = Field(default=4000, ge=1, le=10000)
 
     @field_validator("log_level")
     @classmethod

@@ -130,7 +130,7 @@ RULES = """
 2. 销售成本口径：销售语境中的"成本"指实际销售成本，计算公式为 dim_products.material_cost + dim_products.labor_cost；采购、设备维护、运费等明确领域成本必须遵循召回的指标定义
 3. 订单统计范围：统计收入、订单量、客单价等指标时，必须过滤 order_status = 'completed'，排除 cancelled 和 pending
 4. 汇率转换：涉及多币种收入汇总时，必须通过 order_date 和 currency 关联 exchange_rates 表，使用 rate_to_cny 折算为人民币
-5. 时间范围："最近N个月"使用 DATE_SUB(CURDATE(), INTERVAL N MONTH) 作为起始边界；"本月"指当月1日至当前日期
+5. 时间范围："最近N个月"使用 DATE_SUB(CURDATE(), INTERVAL N MONTH) 作为起始边界；"本月"指当月1日至当前日期。按月输出统一使用 DATE_FORMAT(日期字段, '%Y-%m-01')，以月初日期标识月份。
 6. 费用层级：selling_expense 是销售费用总项，包含 marketing_expense、logistics_expense、warranty_expense，汇总时不得重复计算
 7. 毛利计算：毛利 = net_amount - (material_cost + labor_cost) * quantity
 8. 不要引用 Schema 中不存在的字段，例如 channel
@@ -247,6 +247,7 @@ def build_prompt(
 8. SELECT 只返回用户明确请求的维度和指标；计算毛利、利润等派生指标时，不要额外输出收入、成本等中间指标
 9. 面向用户展示的所有 SELECT 输出列必须使用简洁、准确的中文别名，例如 warehouse_name AS `仓库名称`、SUM(...) AS `可用库存`；SQL 表名、字段名和内部 CTE 名仍使用 Schema 中的英文名称
 10. 禁止输出英文结果别名，例如 available_inventory、gross_profit、order_count；必须分别写成 `可用库存`、`毛利`、`订单数量` 等中文别名
+11. 维度必须使用对应业务字段：产品线/业务线对应 dim_products.product_line，技术路线对应 dim_products.tech_route；不得用技术路线代替产品线，也不得只修改中文别名掩盖维度替换
 """
     if use_rules or use_guards:
         prompt += """11. 优先遵循【关键业务规则】和【常见错误防护】中的约束

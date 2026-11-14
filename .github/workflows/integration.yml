@@ -1,0 +1,103 @@
+name: Integration and release quality
+on:
+  schedule:
+    - cron: '20 18 * * *'
+  workflow_dispatch:
+    inputs:
+      live_model:
+        description: 'Also run paid real-model release gates (requires configured secrets)'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: integration-admin-only
+          MYSQL_ROOT_HOST: '%'
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pintegration-admin-only"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+      chroma:
+        image: chromadb/chroma:1.5.9
+        ports:
+          - 18081:8000
+    env:
+      SIMPLE_CHROMA_HOST: 127.0.0.1
+      SIMPLE_CHROMA_PORT: '18081'
+      DB_HOST: 127.0.0.1
+      DB_PORT: '3306'
+      DB_USER: chatbi_reader
+      DB_PASSWORD: integration-reader-only
+      DB_NAME: chatbi_mvp
+      DB_ADMIN_HOST: 127.0.0.1
+      DB_ADMIN_PORT: '3306'
+      DB_ADMIN_USER: root
+      DB_ADMIN_PASSWORD: integration-admin-only
+      CHATBI_READER_PASSWORD: integration-reader-only
+      CHATBI_CHROMA_TEST: '1'
+      CHATBI_P0_INTEGRATION: '1'
+      CHATBI_P0_DB_PORT: '3306'
+      CHATBI_P0_DB_USER: chatbi_reader
+      CHATBI_P0_DB_PASSWORD: integration-reader-only
+      CHATBI_BENCHMARK_DB_ENABLED: '1'
+      CHATBI_BENCHMARK_DB_PORT: '3306'
+      CHATBI_BENCHMARK_DB_PASSWORD: integration-reader-only
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Wait for Chroma
+        run: curl --fail --retry 30 --retry-all-errors --retry-delay 2 http://127.0.0.1:18081/api/v2/heartbeat
+      - name: Initialize isolated CI demo database
+        run: uv run python -m scripts.init_database
+      - name: Permit reader from the ephemeral runner network
+        run: >-
+          uv run python -c "import os,pymysql;
+          c=pymysql.connect(host=os.environ['DB_ADMIN_HOST'],port=int(os.environ['DB_ADMIN_PORT']),user=os.environ['DB_ADMIN_USER'],password=os.environ['DB_ADMIN_PASSWORD'],autocommit=True);
+          x=c.cursor();
+          x.execute('CREATE USER IF NOT EXISTS chatbi_reader@\'%\' IDENTIFIED BY %s',(os.environ['CHATBI_READER_PASSWORD'],));
+          x.execute('GRANT SELECT ON chatbi_mvp.* TO chatbi_reader@\'%\'');
+          c.close()"
+      - name: Real MySQL and Chroma tests
+        run: uv run pytest tests/test_benchmark_cases.py tests/test_simple_semantic.py tests/test_p0_integration.py tests/test_p2_integration.py tests/test_failure_control_integration.py -q --junitxml=reports/integration-tests.xml
+      - name: Reject silently skipped integration tests
+        run: >-
+          uv run python -c "import xml.etree.ElementTree as E;
+          r=E.parse('reports/integration-tests.xml').getroot();
+          s=list(r.iter('testsuite'));
+          assert sum(int(x.get('tests',0)) for x in s)>=16;
+          assert not any(int(x.get('skipped',0))+int(x.get('failures',0))+int(x.get('errors',0)) for x in s)"
+      - name: Real-model release gates
+        if: github.event_name == 'workflow_dispatch' && inputs.live_model
+        env:
+          OPENAI_API_KEY: ${{ secrets.CHATBI_CHAT_API_KEY }}
+          OPENAI_BASE_URL: ${{ vars.CHATBI_CHAT_BASE_URL || 'https://api.deepseek.com/v1' }}
+          LLM_MODEL: ${{ vars.CHATBI_CHAT_MODEL || 'deepseek-chat' }}
+          INTENT_API_KEY: ${{ secrets.CHATBI_INTENT_API_KEY }}
+          INTENT_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+          INTENT_MODEL: qwen-plus
+        run: uv run python -m scripts.evaluate_release --output reports/release-quality.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-and-release-results
+          path: |
+            reports/integration-tests.xml
+            reports/release-quality.json
+          retention-days: 14

@@ -69,6 +69,8 @@ def test_expected_sql_executes_on_demo_mysql() -> None:
         for case in load_benchmark()["cases"]:
             columns, rows = client.execute(security.secure(case["expected_sql"]))
             assert columns, case["id"]
-            assert rows, case["id"]
+            # Dynamic windows can legitimately be empty as the fixed seed ages.
+            if case["category"] != "dynamic_time":
+                assert rows, case["id"]
     finally:
         client.close()

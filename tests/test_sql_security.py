@@ -90,6 +90,17 @@ def test_grouped_aggregate_is_still_limited(security: QuerySecurityManager) -> N
     assert result.limited is True
 
 
+@pytest.mark.parametrize("sql", [
+    "WITH summary AS (SELECT SUM(net_amount) AS revenue FROM sales_orders) SELECT o.order_id FROM sales_orders o CROSS JOIN summary",
+    "SELECT order_id, SUM(net_amount) OVER () AS revenue FROM sales_orders",
+    "SELECT SUM(net_amount) AS revenue FROM sales_orders UNION ALL SELECT SUM(net_amount) FROM sales_orders",
+])
+def test_nested_or_window_aggregate_does_not_bypass_outer_row_limit(security, sql):
+    secured = security.secure(sql)
+    assert secured.limited
+    assert secured.sql.endswith("LIMIT 25")
+
+
 def test_injects_row_level_policy_through_ast() -> None:
     security = QuerySecurityManager(max_rows=25)
     user = UserContext(

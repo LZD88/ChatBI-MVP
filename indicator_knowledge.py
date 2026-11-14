@@ -81,6 +81,15 @@ class IndicatorKnowledge:
     def __init__(self, config_path: str | Path | None = None) -> None:
         resolved_path = Path(config_path) if config_path else Path(__file__).with_name("indicators.json")
         document = json.loads(resolved_path.read_text(encoding="utf-8"))
+        self._load_document(document)
+
+    @classmethod
+    def from_document(cls, document: dict[str, Any]) -> "IndicatorKnowledge":
+        instance = cls.__new__(cls)
+        instance._load_document(document)
+        return instance
+
+    def _load_document(self, document: Any) -> None:
         items = document.get("indicators") if isinstance(document, dict) else None
         if not isinstance(items, list) or not items:
             raise ValueError("indicator document must contain a non-empty indicators list")

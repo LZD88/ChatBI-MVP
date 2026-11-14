@@ -16,6 +16,7 @@ from openai import APIConnectionError, APITimeoutError, OpenAI, OpenAIError
 
 from chatbi.domain.errors import ChatBIError, ErrorCode
 from chatbi.settings import Settings, get_settings
+from chatbi.application.progress import checkpoint, remaining_timeout
 
 
 class LLMClient:
@@ -30,12 +31,14 @@ class LLMClient:
                 api_key=self.settings.openai_api_key.get_secret_value(),
                 base_url=self.settings.openai_base_url,
                 timeout=self.settings.llm_timeout_seconds,
+                max_retries=0,
             )
         self.client = client
         self.model = self.settings.llm_model
         self.embedding_model = self.settings.embedding_model
         self.temperature = self.settings.llm_temperature
         self.max_tokens = self.settings.llm_max_tokens
+        self.usage = {"calls": 0, "reported_calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
 
     def generate_sql(self, system_msg: str, prompt: str) -> str:
         """
@@ -81,6 +84,7 @@ class LLMClient:
             模型返回的原始文本内容
         """
         try:
+            checkpoint()
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -88,8 +92,16 @@ class LLMClient:
                     {"role": "user", "content": prompt}
                 ],
                 temperature=self.temperature,
-                max_tokens=self.max_tokens
+                max_tokens=self.max_tokens,
+                timeout=remaining_timeout(self.settings.llm_timeout_seconds),
             )
+            checkpoint()
+            self.usage["calls"] += 1
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                self.usage["reported_calls"] += 1
+                self.usage["prompt_tokens"] += int(getattr(usage, "prompt_tokens", 0) or 0)
+                self.usage["completion_tokens"] += int(getattr(usage, "completion_tokens", 0) or 0)
             content = response.choices[0].message.content
             return content.strip() if content else ""
         except (APITimeoutError, APIConnectionError, OpenAIError) as exc:

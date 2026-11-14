@@ -70,3 +70,19 @@ def test_qwen_failure_falls_back_to_local_classifier() -> None:
 def test_join_word_alone_does_not_make_fallback_complex() -> None:
     result = HeuristicIntentClassifier().classify("关联供应商表，按供应商统计采购金额")
     assert result.query_type == "simple"
+
+
+@pytest.mark.parametrize("question", ["分步骤分析各产品线毛利", "先汇总维护成本，再筛选前两台", "从上游结果筛选超支中心"])
+def test_explicit_stages_cannot_be_downgraded_by_model(question) -> None:
+    from chatbi.domain.models import QueryIntent
+    class Primary:
+        calls = 0
+        def classify(self, question):
+            self.calls += 1
+            return QueryIntent("simple", .9, "可使用一次查询", "qwen")
+    primary = Primary()
+    router = FallbackIntentClassifier(primary)
+    assert router.classify(question).query_type == "complex"
+    assert primary.calls == 1
+    assert router.classify("关联供应商表，按供应商统计采购金额").query_type == "simple"
+    assert router.last_error is None

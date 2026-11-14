@@ -1,0 +1,27 @@
+{
+  "version": "1.0.0",
+  "database_snapshot": "chatbi-mvp-seed-2026-11-09",
+  "cases": [
+    {
+      "id": "low-margin-product-cost",
+      "question": "分步骤分析2026年第三季度各产品线已完成订单的收入、毛利和毛利率，先筛出毛利率低于0.8的产品线，再只核查这些产品线的销售成本。最终表格仅含产品线和销售成本，并给出有证据的复核建议。",
+      "min_steps": 2,
+      "requires_binding": true,
+      "expected_sql": "SELECT p.product_line AS product_line, SUM(o.quantity*(p.material_cost+p.labor_cost)) AS sales_cost FROM sales_orders o JOIN dim_products p ON o.product_id=p.product_id JOIN exchange_rates r ON o.order_date=r.rate_date AND o.currency=r.currency WHERE o.order_status='completed' AND o.order_date>='2026-07-01' AND o.order_date<'2026-10-01' GROUP BY p.product_line HAVING SUM(o.net_amount*r.rate_to_cny-o.quantity*(p.material_cost+p.labor_cost))/NULLIF(SUM(o.net_amount*r.rate_to_cny),0)<0.8"
+    },
+    {
+      "id": "over-budget-centers",
+      "question": "分步骤比较2026年各成本中心的预算金额和实际金额，先汇总各中心全年预算和实际金额，再从结果中筛选实际超过预算的中心，计算超支金额。最终表格按顺序输出成本中心名称、预算金额、实际金额、超支金额，并给出复核建议。",
+      "min_steps": 2,
+      "requires_binding": true,
+      "expected_sql": "SELECT c.cost_center_name, SUM(b.budget_amount), SUM(b.actual_amount), SUM(b.actual_amount)-SUM(b.budget_amount) FROM budgets b JOIN dim_cost_centers c ON b.cost_center_id=c.cost_center_id WHERE b.budget_year=2026 GROUP BY c.cost_center_name HAVING SUM(b.actual_amount)>SUM(b.budget_amount)"
+    },
+    {
+      "id": "maintenance-cost-ranking",
+      "question": "先按设备名称汇总2026年设备维护成本，再从这个上游结果里筛出维护成本最高的两台设备。最终表格只包含设备名称、设备维护成本两列，给出基于数据的复核建议；明确这是成本比较而不是故障原因证明。",
+      "min_steps": 2,
+      "requires_binding": true,
+      "expected_sql": "SELECT e.equipment_name, SUM(m.maintenance_cost) FROM equipment_maintenance m JOIN equipment e ON m.equipment_id=e.equipment_id WHERE m.maintenance_date>='2026-01-01' AND m.maintenance_date<'2027-01-01' GROUP BY e.equipment_name ORDER BY SUM(m.maintenance_cost) DESC, e.equipment_name LIMIT 2"
+    }
+  ]
+}

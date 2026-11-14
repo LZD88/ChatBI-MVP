@@ -14,6 +14,7 @@ from chatbi.domain.schema import SchemaSelection, SimpleSemanticSelection
 from chatbi.domain.security import DEFAULT_SCHEMA
 from chatbi.settings import Settings, get_settings
 from indicator_knowledge import IndicatorKnowledge
+from chatbi.infrastructure.chinese_retrieval import BailianEncoder, rerank
 
 
 TABLE_DESCRIPTIONS: dict[str, str] = {
@@ -57,6 +58,7 @@ FIELD_TERMS: dict[str, str] = {
     "quantity": "数量 销量",
     "region": "地区 区域 大区 市场",
     "product_line": "产品线 业务线",
+    "tech_route": "技术路线 电池技术路线",
     "order_status": "订单状态 完成 取消 待处理",
     "payment_amount": "付款金额 回款金额",
     "budget_amount": "预算金额",
@@ -134,6 +136,7 @@ class LocalFeatureEncoder:
 
     def __init__(self, dimensions: int = 384) -> None:
         self.dimensions = dimensions
+        self.identity = "local-lexical-384"
 
     def encode(self, text: str) -> list[float]:
         normalized = re.sub(r"\s+", "", text.lower())
@@ -152,10 +155,21 @@ class LocalFeatureEncoder:
 
 
 class ChromaSimpleSemanticPipeline:
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(self, settings: Settings | None = None, indicators: IndicatorKnowledge | None = None) -> None:
         self.settings = settings or get_settings()
         self.encoder = LocalFeatureEncoder()
-        self.indicator_knowledge = IndicatorKnowledge()
+        self.diagnostics: dict[str, Any] = {"encoder": self.encoder.identity, "reranker": "chinese_bm25_vector", "fallback": False}
+        if self.settings.chinese_embedding_provider != "local" and self.settings.intent_api_key:
+            try:
+                candidate = BailianEncoder(self.settings)
+                candidate.encode("中文商业指标检索")
+                self.encoder = candidate  # type: ignore[assignment]
+            except Exception:
+                self.diagnostics["fallback"] = True
+                self.diagnostics["fallback_reason"] = "百炼向量服务不可用，使用本地词法向量"
+        self.diagnostics["encoder"] = self.encoder.identity
+        self.indicator_knowledge = indicators or IndicatorKnowledge()
+        self._index_dirty = False
         # Chroma is imported lazily and accessed over HTTP. The server runs in
         # an isolated Linux VM because native Chroma terminates this Windows
         # process before Python can handle the failure.
@@ -166,12 +180,17 @@ class ChromaSimpleSemanticPipeline:
             port=self.settings.simple_chroma_port,
             ssl=self.settings.simple_chroma_ssl,
         )
-        self.indicators: Any = self.client.get_or_create_collection("indicators", metadata={"hnsw:space": "cosine"})
-        self.tables: Any = self.client.get_or_create_collection("tables", metadata={"hnsw:space": "cosine"})
-        self.fields: Any = self.client.get_or_create_collection("fields", metadata={"hnsw:space": "cosine"})
+        suffix = "_zh_v3" if isinstance(self.encoder, BailianEncoder) else ""
+        self.indicators: Any = self.client.get_or_create_collection("indicators" + suffix, metadata={"hnsw:space": "cosine"})
+        self.tables: Any = self.client.get_or_create_collection("tables" + suffix, metadata={"hnsw:space": "cosine"})
+        self.fields: Any = self.client.get_or_create_collection("fields" + suffix, metadata={"hnsw:space": "cosine"})
         self._ensure_index()
 
     def resolve(self, question: str) -> SimpleSemanticSelection:
+        self.diagnostics["candidates"] = {}
+        if self._index_dirty:
+            self._ensure_index()
+            self._index_dirty = False
         indicator_names = self._retrieve_indicators(question)
         indicator_text = self._indicator_text(indicator_names)
         table_names = self._retrieve_tables(question, indicator_names)
@@ -192,7 +211,9 @@ class ChromaSimpleSemanticPipeline:
         valid = False
         if manifest.is_file():
             try:
-                valid = json.loads(manifest.read_text(encoding="utf-8")).get("version") == self.settings.simple_schema_index_version
+                recorded = json.loads(manifest.read_text(encoding="utf-8"))
+                valid = (recorded.get("version") == self.settings.simple_schema_index_version
+                         and recorded.get("catalog_hash") == self._catalog_hash())
             except (OSError, ValueError):
                 valid = False
         expected = (len(self.indicator_knowledge.indicators), len(DEFAULT_SCHEMA), sum(map(len, DEFAULT_SCHEMA.values())))
@@ -232,27 +253,31 @@ class ChromaSimpleSemanticPipeline:
         self.fields.add(ids=field_ids, documents=field_docs, embeddings=self.encoder.encode_many(field_docs), metadatas=field_meta)
         manifest.parent.mkdir(parents=True, exist_ok=True)
         manifest.write_text(json.dumps({"version": self.settings.simple_schema_index_version,
+                                        "catalog_hash": self._catalog_hash(),
                                         "indicators": expected[0], "tables": expected[1], "fields": expected[2]},
                                        ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _catalog_hash(self) -> str:
+        metadata = {"encoder": self.encoder.identity, "indicators": self.indicator_knowledge.indicators,
+                    "field_terms": FIELD_TERMS, "tables": TABLE_DESCRIPTIONS}
+        return hashlib.sha256(json.dumps(metadata, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+    def update_knowledge(self, indicators: IndicatorKnowledge) -> None:
+        if self.indicator_knowledge.indicators != indicators.indicators:
+            self.indicator_knowledge = indicators
+            self._index_dirty = True
 
     def _retrieve_indicators(self, question: str) -> list[str]:
         exact = self.indicator_knowledge.detect_indicators(question)
         # Governed names and aliases are authoritative. Do not broaden an
         # exact metric such as "毛利" into the related but different "利润".
         if exact:
+            self.diagnostics.setdefault("candidates", {})["indicators"] = {"source": "governed_exact", "names": exact}
             return exact
-        result = self.indicators.query(query_embeddings=[self.encoder.encode(question)], n_results=min(3, self.indicators.count()))
-        distances = result.get("distances", [[]])[0]
-        metadatas = result.get("metadatas", [[]])[0]
-        # A permissive cutoff creates false indicator matches for ordinary
-        # business nouns (for example, procurement amount being treated as
-        # profit). Exact aliases always win; semantic additions must be close.
-        ranked = [
-            str(meta["name"])
-            for meta, distance in zip(metadatas, distances)
-            if meta and distance <= self.settings.simple_indicator_max_distance
-        ]
-        return list(dict.fromkeys(ranked))
+        result = self.indicators.query(query_embeddings=[self.encoder.encode(question)], n_results=min(12, self.indicators.count()), include=["metadatas", "documents", "distances"])
+        _, scores = rerank(question, result, 3)
+        self.diagnostics.setdefault("candidates", {})["indicators"] = scores
+        return list(dict.fromkeys(str(row["metadata"]["name"]) for row in scores if row["distance"] <= self.settings.simple_indicator_max_distance))
 
     def _retrieve_tables(self, question: str, indicators: list[str]) -> list[str]:
         exact_tables = [
@@ -274,23 +299,33 @@ class ChromaSimpleSemanticPipeline:
 
         indicator_context = " ".join(self.indicator_knowledge.get_indicator_text(name) for name in indicators)
         result = self.tables.query(query_embeddings=[self.encoder.encode(f"{question} {indicator_context}")],
-                                   n_results=min(self.settings.simple_table_top_k, self.tables.count()))
-        tables = [str(meta["table"]) for meta in result.get("metadatas", [[]])[0] if meta]
+                                   n_results=min(self.settings.simple_table_top_k * 3, self.tables.count()), include=["metadatas", "documents", "distances"])
+        metas, scores = rerank(question, result, self.settings.simple_table_top_k)
+        self.diagnostics.setdefault("candidates", {})["tables"] = scores
+        tables = [str(meta["table"]) for meta in metas]
         return list(dict.fromkeys(tables))
 
     def _retrieve_fields(self, question: str, tables: list[str], indicators: list[str]) -> list[str]:
+        if not hasattr(self, "diagnostics"):
+            self.diagnostics = {}
         where: dict[str, Any] | None = {"table": {"$in": tables}} if tables else None
         result = self.fields.query(query_embeddings=[self.encoder.encode(question)],
-                                   n_results=min(self.settings.simple_field_top_k, self.fields.count()), where=where)
-        fields = [f"{meta['table']}.{meta['field']}" for meta in result.get("metadatas", [[]])[0] if meta]
+                                   n_results=min(self.settings.simple_field_top_k * 3, sum(len(DEFAULT_SCHEMA[t]) for t in tables) if tables else self.fields.count()), where=where,
+                                   include=["metadatas", "documents", "distances"])
+        metas, scores = rerank(question, result, self.settings.simple_field_top_k)
+        self.diagnostics.setdefault("candidates", {})["fields"] = scores
+        fields = [f"{meta['table']}.{meta['field']}" for meta in metas]
         knowledge = " ".join(self.indicator_knowledge.get_indicator_text(name) for name in indicators)
         for table in tables:
             for field in DEFAULT_SCHEMA[table]:
-                if re.search(rf"\b{re.escape(field)}\b", knowledge):
+                aliases = FIELD_TERMS.get(field, "").split()
+                if (re.search(rf"\b{re.escape(field)}\b", knowledge)
+                        or any(alias in question for alias in aliases)):
                     fields.append(f"{table}.{field}")
         return list(dict.fromkeys(fields))
 
-    def _infer_joins(self, requested: list[str]) -> tuple[list[str], list[str]]:
+    @staticmethod
+    def _infer_joins(requested: list[str]) -> tuple[list[str], list[str]]:
         if len(requested) < 2:
             return requested, []
         adjacency: dict[str, list[tuple[str, tuple[str, str, str, str]]]] = {table: [] for table in DEFAULT_SCHEMA}
@@ -329,7 +364,7 @@ class ChromaSimpleSemanticPipeline:
                     if table not in selected:
                         selected.append(table)
                     connected.add(table)
-        joins = [self._format_join(*edge) for edge in edges]
+        joins = [ChromaSimpleSemanticPipeline._format_join(*edge) for edge in edges]
         return selected, joins
 
     @staticmethod
@@ -338,7 +373,8 @@ class ChromaSimpleSemanticPipeline:
         condition = " AND ".join(f"{left}.{lf} = {right}.{rf}" for lf, rf in pairs)
         return f"关联：{condition}"
 
-    def _build_schema(self, tables: list[str], fields: list[str], joins: list[str]) -> str:
+    @staticmethod
+    def _build_schema(tables: list[str], fields: list[str], joins: list[str]) -> str:
         selected_by_table: dict[str, set[str]] = {table: set() for table in tables}
         for value in fields:
             table, field = value.split(".", 1)
@@ -353,6 +389,9 @@ class ChromaSimpleSemanticPipeline:
             selected = selected_by_table[table] or set(DEFAULT_SCHEMA[table])
             lines.append(f"表：{table}（{TABLE_DESCRIPTIONS[table]}）")
             lines.append(f"- 字段：{', '.join(sorted(selected))}")
+            for field in sorted(selected):
+                if field in FIELD_TERMS:
+                    lines.append(f"  {table}.{field}：{FIELD_TERMS[field]}")
         lines.extend(joins)
         return "\n".join(lines)
 

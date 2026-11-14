@@ -5,10 +5,13 @@ from __future__ import annotations
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+from chatbi.application.visualization import VisualizationSpec
 
 
 class QueryRequest(BaseModel):
     question: str = Field(min_length=1, max_length=10000)
+    parent_query_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+    review_plan: bool = False
 
 
 class QueryResponse(BaseModel):
@@ -45,6 +48,13 @@ class QueryResponse(BaseModel):
     report_markdown: str | None = None
     report_source: str | None = None
     agent_timings_ms: dict[str, float] = Field(default_factory=dict)
+    visualization_spec: list[VisualizationSpec] = Field(default_factory=list)
+    catalog_revision: str | None = None
+    validation: dict[str, Any] = Field(default_factory=dict)
+    analysis_context: dict[str, Any] = Field(default_factory=dict)
+    retrieval_diagnostics: dict[str, Any] = Field(default_factory=dict)
+    token_usage: dict[str, Any] = Field(default_factory=dict)
+    message: str | None = None
 
 
 class ErrorResponse(BaseModel):
@@ -52,6 +62,8 @@ class ErrorResponse(BaseModel):
     code: str
     message: str
     fields: list[dict[str, Any]] | None = None
+    history_id: str | None = None
+    suspension: dict[str, Any] | None = None
 
 
 class ComponentHealth(BaseModel):
